@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1230" viewBox="0 0 1600 1230" role="img" aria-labelledby="title description">
+  <title id="title">Схема нормализованной модели core</title>
+  <desc id="description">Девять таблиц core. Сплошные стрелки показывают семь внешних ключей. Пунктирная стрелка от products к category_translations показывает необязательное соединение по категории без внешнего ключа.</desc>
+  <defs>
+    <marker id="fk-arrow" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1 L9 5.5 L1 10" fill="none" stroke="#26728a" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="lookup-arrow" markerWidth="11" markerHeight="11" refX="9" refY="5.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1 L9 5.5 L1 10" fill="none" stroke="#9a6a25" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      .bg { fill: #f5f8fc; }
+      .title { font: 700 36px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #152b43; }
+      .subtitle { font: 18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #526578; }
+      .card { fill: #fff; stroke: #c7d4df; stroke-width: 2; rx: 13; }
+      .head { fill: #193f63; }
+      .headtxt { font: 700 21px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #fff; }
+      .field { font: 17px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #253a50; }
+      .key { font: 700 16px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1b6680; }
+      .note { font: 16px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #526578; }
+      .edge { fill: none; stroke: #26728a; stroke-width: 3; marker-end: url(#fk-arrow); stroke-linejoin: round; }
+      .lookup { fill: none; stroke: #9a6a25; stroke-width: 3; stroke-dasharray: 9 7; marker-end: url(#lookup-arrow); }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1600" height="1230"/>
+  <text class="title" x="80" y="55">Нормализованная модель core</text>
+  <text class="subtitle" x="80" y="82">Стрелка идёт от дочерней таблицы к родительской · PK — первичный ключ · FK — внешний ключ</text>
+
+  <!-- Foreign keys, confirmed in the running PostgreSQL schema. -->
+  <path class="edge" d="M255 290 L255 226"/>
+  <path class="edge" d="M255 530 L255 456"/>
+  <path class="edge" d="M610 570 L451 570"/>
+  <path class="edge" d="M610 870 L535 870 L535 665 L451 665"/>
+  <path class="edge" d="M610 1070 L500 1070 L500 713 L451 713"/>
+  <path class="edge" d="M990 570 L1055 570 L1055 420 L1114 420"/>
+  <path class="edge" d="M990 665 L1114 665"/>
+  <!-- Optional name lookup, intentionally without a foreign key. -->
+  <path class="lookup" d="M1325 310 L1325 251"/>
+  <text class="note" x="1345" y="275">необязательный перевод</text>
+
+  <!-- Buyer -->
+  <rect class="card" x="80" y="105" width="355" height="121"/>
+  <path class="head" d="M93 105 H422 Q435 105 435 118 V148 H80 V118 Q80 105 93 105 Z"/>
+  <text class="headtxt" x="100" y="136">buyers</text>
+  <text class="key" x="100" y="179">PK</text>
+  <text class="field" x="148" y="179">customer_unique_id</text>
+  <text class="note" x="100" y="207">Устойчивая личность покупателя</text>
+
+  <!-- Customer records -->
+  <rect class="card" x="80" y="290" width="355" height="166"/>
+  <path class="head" d="M93 290 H422 Q435 290 435 303 V333 H80 V303 Q80 290 93 290 Z"/>
+  <text class="headtxt" x="100" y="321">customer_records</text>
+  <text class="key" x="100" y="367">PK</text>
+  <text class="field" x="148" y="367">customer_id</text>
+  <text class="key" x="100" y="398">FK</text>
+  <text class="field" x="148" y="398">customer_unique_id</text>
+  <text class="field" x="100" y="431">zip · city · state</text>
+
+  <!-- Orders -->
+  <rect class="card" x="80" y="530" width="355" height="220"/>
+  <path class="head" d="M93 530 H422 Q435 530 435 543 V573 H80 V543 Q80 530 93 530 Z"/>
+  <text class="headtxt" x="100" y="561">orders</text>
+  <text class="key" x="100" y="607">PK</text>
+  <text class="field" x="148" y="607">order_id</text>
+  <text class="key" x="100" y="638">FK</text>
+  <text class="field" x="148" y="638">customer_id</text>
+  <text class="field" x="100" y="670">order_status</text>
+  <text class="field" x="100" y="701">purchased_at</text>
+  <text class="note" x="100" y="731">одобрение · доставка · прогноз</text>
+
+  <!-- Items -->
+  <rect class="card" x="610" y="500" width="380" height="230"/>
+  <path class="head" d="M623 500 H977 Q990 500 990 513 V543 H610 V513 Q610 500 623 500 Z"/>
+  <text class="headtxt" x="630" y="531">order_items</text>
+  <text class="key" x="630" y="576">PK</text>
+  <text class="field" x="678" y="576">order_id + order_item_id</text>
+  <text class="key" x="630" y="607">FK</text>
+  <text class="field" x="678" y="607">product_id · seller_id</text>
+  <text class="field" x="630" y="639">item_ordinal</text>
+  <text class="field" x="630" y="670">price · freight_value</text>
+  <text class="field" x="630" y="701">shipping_limit_at</text>
+
+  <!-- Payments -->
+  <rect class="card" x="610" y="820" width="380" height="169"/>
+  <path class="head" d="M623 820 H977 Q990 820 990 833 V863 H610 V833 Q610 820 623 820 Z"/>
+  <text class="headtxt" x="630" y="851">payments</text>
+  <text class="key" x="630" y="897">PK</text>
+  <text class="field" x="678" y="897">order_id + payment_sequential</text>
+  <text class="field" x="630" y="929">payment_type · installments</text>
+  <text class="field" x="630" y="960">payment_value</text>
+
+  <!-- Reviews -->
+  <rect class="card" x="610" y="1015" width="380" height="150"/>
+  <path class="head" d="M623 1015 H977 Q990 1015 990 1028 V1058 H610 V1028 Q610 1015 623 1015 Z"/>
+  <text class="headtxt" x="630" y="1046">reviews</text>
+  <text class="key" x="630" y="1091">PK</text>
+  <text class="field" x="678" y="1091">review_id + order_id</text>
+  <text class="field" x="630" y="1122">score · comments · dates</text>
+
+  <!-- Category translations -->
+  <rect class="card" x="1130" y="105" width="390" height="146"/>
+  <path class="head" d="M1143 105 H1507 Q1520 105 1520 118 V148 H1130 V118 Q1130 105 1143 105 Z"/>
+  <text class="headtxt" x="1150" y="136">category_translations</text>
+  <text class="key" x="1150" y="181">PK</text>
+  <text class="field" x="1198" y="181">category_name</text>
+  <text class="field" x="1150" y="215">category_name_english</text>
+
+  <!-- Products -->
+  <rect class="card" x="1130" y="310" width="390" height="205"/>
+  <path class="head" d="M1143 310 H1507 Q1520 310 1520 323 V353 H1130 V323 Q1130 310 1143 310 Z"/>
+  <text class="headtxt" x="1150" y="341">products</text>
+  <text class="key" x="1150" y="388">PK</text>
+  <text class="field" x="1198" y="388">product_id</text>
+  <text class="field" x="1150" y="420">category_name</text>
+  <text class="field" x="1150" y="451">name_length · description_length</text>
+  <text class="field" x="1150" y="482">photos · weight · dimensions</text>
+
+  <!-- Sellers -->
+  <rect class="card" x="1130" y="600" width="390" height="155"/>
+  <path class="head" d="M1143 600 H1507 Q1520 600 1520 613 V643 H1130 V613 Q1130 600 1143 600 Z"/>
+  <text class="headtxt" x="1150" y="631">sellers</text>
+  <text class="key" x="1150" y="678">PK</text>
+  <text class="field" x="1198" y="678">seller_id</text>
+  <text class="field" x="1150" y="712">zip · city · state</text>
+
+  <text class="note" x="80" y="1198">Сплошная стрелка — FOREIGN KEY. Пунктир — LEFT JOIN по category_name. Вспомогательное представление source_map не показано.</text>
+</svg>
