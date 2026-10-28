@@ -230,6 +230,15 @@ stage_up() {
   say "    контейнер поднят и healthy"
 }
 
+# psql в нашу базу. TTY — только если и stdin, и stdout — терминал
+# (в mintty без winpty docker TTY не работает, PLAN 6.3).
+stage_psql() {
+  local tty=(-T)
+  if [ -t 0 ] && [ -t 1 ]; then tty=(); fi
+  export PGAPPNAME="run.sh:psql:${USER:-${USERNAME:-user}}@$(hostname)"
+  compose run --rm "${tty[@]}" pipeline psql -X "${PSQL_ARGS[@]}"
+}
+
 # Запуск стадии в контейнере pipeline. Код выхода — код стадии.
 pipeline_run() {
   local st=$1 rc=0
@@ -469,6 +478,41 @@ SQL
   say "    отпечаток raw: ${fp:0:12}…"
 }
 
+# build: model/build.sql сам открывает и закрывает транзакцию, поэтому
+# --single-transaction не передаём (PLAN 6.8).
+stage_build() {
+  local fp=none state out=/tmp/build.out rc=0
+  wait_db
+  state=$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT to_regclass('ops.raw_state') IS NOT NULL") || exit "$E_BUILD"
+  if [ "$state" = t ]; then
+    fp=$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT coalesce((SELECT fingerprint FROM ops.raw_state), 'none')") || exit "$E_BUILD"
+  fi
+  [ "$fp" != none ] || say "    внимание: raw не загружен или загрузка не завершена (ops.raw_state пуст)"
+
+  local args=(-v git_commit="$GIT_COMMIT" -v raw_fingerprint="$fp")
+  if [ -n "${ANALYST_PASSWORD:-}" ]; then args+=(-v analyst_password="$ANALYST_PASSWORD"); fi
+
+  step "model/build.sql (коммит $GIT_COMMIT, отпечаток raw ${fp:0:12})"
+  psql -X -v ON_ERROR_STOP=1 "${args[@]}" -f "$SOL_DIR/model/build.sql" 2>&1 | tee "$out" || rc=$?
+  case "$rc" in
+    0) ;;
+    2) die "$E_UP" "соединение с базой потеряно во время сборки" \
+           "Сборка — одна транзакция: на сервере она откатится, прежняя модель останется." \
+           "Что делать: проверьте контейнер (из корня форка): docker compose ps" ;;
+    *)
+      if grep -q 'CHECK FAILED:' "$out"; then
+        die "$E_CHECK" "самопроверки сборки не прошли" \
+          "Где: model/90_checks.sql, список упавших проверок — выше" \
+          "Сборка откатена целиком, прежняя версия модели осталась." \
+          "Что делать: найти причину в данных или коде; пороги без решения команды не ослаблять."
+      fi
+      die "$E_BUILD" "ошибка в сборке модели (psql, код $rc)" \
+        "Где: файл и строка — в сообщении psql выше" \
+        "Сборка откатена целиком, прежняя версия модели осталась." \
+        "Если это lock timeout — кто-то держит блокировку на схемах базы $SOLUTION_DB (открытая транзакция в клиенте): закройте её и повторите." ;;
+  esac
+}
+
 # ---------------------------------------------------------------------
 #  main
 # ---------------------------------------------------------------------
@@ -505,9 +549,11 @@ main() {
   [ ${#stages[@]} -gt 0 ] || stages=(up data raw build)
 
   if [ "$mode" = psql ]; then
+    # Утилита для человека: код выхода — код самого psql.
+    local rc=0
     preflight >/dev/null
-    stage_psql
-    return
+    stage_psql || rc=$?
+    exit "$rc"
   fi
 
   start_log
