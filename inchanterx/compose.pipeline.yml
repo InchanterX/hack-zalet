@@ -1,0 +1,31 @@
+# Дополнение к ../docker-compose.yml организаторов (PLAN.md, 6.3).
+# Сервис postgres здесь не упоминается и не меняется: контейнер общий.
+# Пути относительны корня форка (run.sh передаёт --project-directory),
+# переменные SOLUTION*, HOST_*, GIT_COMMIT, ANALYST_PASSWORD экспортирует run.sh.
+services:
+  pipeline:
+    profiles: ["pipeline"]
+    build: ./${SOLUTION_DIR:?запускайте через run.sh}/tools
+    image: capibara-pipeline-${SOLUTION:?запускайте через run.sh}
+    # tini пересылает SIGTERM/SIGINT в bash и psql (прерывание, PLAN 6.15).
+    init: true
+    # На Linux run.sh подставляет uid хоста; на Docker Desktop — root (PLAN 6.3).
+    user: "${HOST_UID:-0}:${HOST_GID:-0}"
+    volumes:
+      - .:/work
+    working_dir: /work/${SOLUTION_DIR}
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: hack
+      PGPASSWORD: hack
+      PGDATABASE: ${SOLUTION_DB:?запускайте через run.sh}
+      PGAPPNAME: ${PGAPPNAME:-run.sh}
+      HOME: /tmp
+      SOLUTION_DB: ${SOLUTION_DB}
+      GIT_COMMIT: ${GIT_COMMIT:-unknown}
+      ANALYST_PASSWORD: ${ANALYST_PASSWORD:-}
+      FORCE_RAW: ${FORCE_RAW:-0}
+    depends_on:
+      postgres:
+        condition: service_healthy
