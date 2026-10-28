@@ -26,6 +26,7 @@ services:
       GIT_COMMIT: ${GIT_COMMIT:-unknown}
       ANALYST_PASSWORD: ${ANALYST_PASSWORD:-}
       FORCE_RAW: ${FORCE_RAW:-0}
+      RESET_DB: ${RESET_DB:-0}
     depends_on:
       postgres:
         condition: service_healthy
