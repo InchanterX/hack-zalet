@@ -230,13 +230,27 @@ stage_up() {
   say "    контейнер поднят и healthy"
 }
 
+# Стадии запускаются с --no-deps: иначе compose run при расхождении
+# конфигурации postgres (после sync или из клона в другом пути) пересоздал бы
+# общий контейнер. Поэтому готовность postgres проверяем сами.
+require_postgres() {
+  local cid health=""
+  cid=$(compose ps -q postgres)
+  [ -z "$cid" ] || health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid")
+  [ "$health" = healthy ] \
+    || die "$E_UP" "PostgreSQL организаторов не запущен или не готов (состояние: ${health:-не запущен})" \
+           "Где: сервис postgres из ../docker-compose.yml" \
+           "Что делать: ./run.sh up (или полный ./run.sh)."
+}
+
 # psql в нашу базу. TTY — только если и stdin, и stdout — терминал
 # (в mintty без winpty docker TTY не работает, PLAN 6.3).
 stage_psql() {
   local tty=(-T)
   if [ -t 0 ] && [ -t 1 ]; then tty=(); fi
   export PGAPPNAME="run.sh:psql:${USER:-${USERNAME:-user}}@$(hostname)"
-  compose run --rm "${tty[@]}" pipeline psql -X "${PSQL_ARGS[@]}"
+  require_postgres
+  compose run --rm --no-deps "${tty[@]}" pipeline psql -X "${PSQL_ARGS[@]}"
 }
 
 # Запуск стадии в контейнере pipeline. Код выхода — код стадии.
@@ -245,7 +259,8 @@ pipeline_run() {
   shift
   RUN_NAME="$SOLUTION-run-$st-$$"
   export PGAPPNAME="run.sh:$st:${USER:-${USERNAME:-user}}@$(hostname)"
-  compose run --rm -T --name "$RUN_NAME" pipeline bash ./run.sh --inside "$st" "$@" || rc=$?
+  require_postgres
+  compose run --rm --no-deps -T --name "$RUN_NAME" pipeline bash ./run.sh --inside "$st" "$@" || rc=$?
   RUN_NAME=""
   return "$rc"
 }
