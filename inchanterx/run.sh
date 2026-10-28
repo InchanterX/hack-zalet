@@ -310,6 +310,165 @@ stage_data() {
   printf '%s\n' "$report" | sed 's/^/    /'
 }
 
+# Ожидание базы в соседнем контейнере (до 60 с).
+wait_db() {
+  local i
+  for i in $(seq 60); do
+    pg_isready -q && return 0
+    sleep 1
+  done
+  die "$E_UP" "база $PGHOST:$PGPORT не отвечает 60 с" \
+    "Что делать: проверьте контейнер (из корня форка): docker compose ps; docker compose logs postgres"
+}
+
+# psql_or_die <код> <что делаем> <аргументы psql...>
+# Код psql 2 (потеряно соединение) → 20, остальные ошибки → <код> (PLAN 6.15).
+psql_or_die() {
+  local code=$1 what=$2 rc=0
+  shift 2
+  psql -X -q -v ON_ERROR_STOP=1 "$@" || rc=$?
+  case "$rc" in
+    0) ;;
+    2) die "$E_UP" "соединение с базой потеряно: $what" \
+           "Что делать: проверьте контейнер (из корня форка): docker compose ps" ;;
+    *) die "$code" "$what: ошибка psql (код $rc), сообщение выше" ;;
+  esac
+}
+
+# Отпечаток raw = хэш эталонных хэшей CSV, загрузчика и DDL организаторов
+# и наших патчей inject/ (PLAN 6.6). Пути — относительно папки решения.
+raw_fingerprint() {
+  (
+    cd "$SOL_DIR"
+    files=(data.sha256 ../scripts/load_raw.py)
+    for f in ../scripts/init/*.sql inject/*.sql; do
+      if [ -f "$f" ]; then files+=("$f"); fi
+    done
+    sha256sum "${files[@]}"
+  ) | sha256sum | cut -c1-64
+}
+
+inject_files() {
+  local f
+  for f in "$SOL_DIR"/inject/*.sql; do
+    if [ -f "$f" ]; then printf '%s\n' "${f#"$SOL_DIR"/}"; fi
+  done
+}
+
+# Состояние raw переживает сборку (ops не пересоздаётся) и перезагрузку raw
+# (загрузчик пересоздаёт только таблицы raw).
+readonly RAW_STATE_DDL="
+SET client_min_messages = warning;
+CREATE SCHEMA IF NOT EXISTS ops;
+CREATE TABLE IF NOT EXISTS ops.raw_state (
+    id          boolean PRIMARY KEY DEFAULT true CHECK (id),
+    fingerprint text        NOT NULL,
+    loaded_at   timestamptz NOT NULL DEFAULT now(),
+    row_counts  jsonb       NOT NULL,
+    inject      text[]      NOT NULL
+);
+COMMENT ON TABLE ops.raw_state IS 'Состояние raw (одна строка): отпечаток входа последней успешной загрузки, пишет стадия raw в run.sh. Нет строки — raw не готов и будет перезалит.';
+COMMENT ON COLUMN ops.raw_state.fingerprint IS 'sha256 от data.sha256, ../scripts/load_raw.py, ../scripts/init/*.sql и inject/*.sql (PLAN 6.6).';
+COMMENT ON COLUMN ops.raw_state.row_counts IS 'Число строк по таблицам raw после загрузки и патчей inject/.';
+COMMENT ON COLUMN ops.raw_state.inject IS 'Применённые патчи inject/ по порядку.';
+"
+
+stage_raw() {
+  local db=$SOLUTION_DB fp state
+  case "$RESERVED_DBS" in
+    *" $db "*) die "$E_RAW" "база «$db» зарезервирована, стадия raw её не трогает" ;;
+  esac
+  wait_db
+
+  if [ "${RESET_DB:-0}" = 1 ]; then
+    step "удаляю базу $db (--reset; другие базы и контейнер не трогаются)"
+    psql_or_die "$E_RAW" "удаление базы $db" -d postgres -v db="$db" <<'SQL'
+SELECT format('DROP DATABASE IF EXISTS %I WITH (FORCE)', :'db') \gexec
+SQL
+  fi
+
+  step "база $db"
+  psql_or_die "$E_RAW" "создание базы $db" -d postgres -v db="$db" <<'SQL'
+SELECT format('CREATE DATABASE %I', :'db')
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db') \gexec
+SELECT format('ALTER DATABASE %I SET search_path TO core, public', :'db') \gexec
+SQL
+
+  fp=$(raw_fingerprint)
+  if [ "${FORCE_RAW:-0}" != 1 ]; then
+    state=$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT to_regclass('ops.raw_state') IS NOT NULL AND to_regclass('raw.orders') IS NOT NULL") || exit "$E_RAW"
+    if [ "$state" = t ]; then
+      state=$(psql -X -At -v ON_ERROR_STOP=1 -c "SELECT (SELECT fingerprint FROM ops.raw_state) || ':' || EXISTS (SELECT FROM raw.orders)") || exit "$E_RAW"
+      if [ "$state" = "$fp:true" ]; then
+        say "    отпечаток не изменился (${fp:0:12}…), raw загружен — пропуск"
+        return 0
+      fi
+    fi
+  fi
+
+  step "сбрасываю отпечаток: прерванная загрузка не будет принята за готовую"
+  psql_or_die "$E_RAW" "подготовка ops.raw_state" -c "$RAW_STATE_DDL DELETE FROM ops.raw_state;"
+
+  step "загрузчик организаторов (../scripts/load_raw.py)"
+  python3 "$ROOT/scripts/load_raw.py" --host "$PGHOST" --port "$PGPORT" --db "$db" \
+    || die "$E_RAW" "загрузчик организаторов завершился с ошибкой" \
+           "Где: ../scripts/load_raw.py, база $db; сообщение загрузчика — выше" \
+           "Что делать: загрузчик не правим (PLAN 6.15). Проверьте ../data (./run.sh data) и изменения в ../scripts после sync."
+
+  # Патчи, сверка строк и отпечаток — одна транзакция, отпечаток последним.
+  local sql=/tmp/raw_finish.sql inject=() expected tbl n f
+  mapfile -t inject < <(inject_files)
+  expected=$(awk 'NF == 2 {printf "%s\"%s\":%s", (NR > 1 ? "," : ""), $1, $2}' "$SOL_DIR/data.rows")
+  {
+    printf 'BEGIN;\n'
+    for f in "${inject[@]}"; do
+      printf '\\echo применяю %s\n\\i %s\n' "$f" "$SOL_DIR/$f"
+    done
+    printf "SELECT set_config('capibara.raw_expected', :'expected', true) AS _e, set_config('capibara.has_inject', :'has_inject', true) AS _i \\\\gset\n"
+    printf 'CREATE TEMP TABLE raw_count (table_name text PRIMARY KEY, n bigint NOT NULL) ON COMMIT DROP;\n'
+    while read -r tbl n; do
+      [ -n "$tbl" ] || continue
+      printf "INSERT INTO raw_count SELECT '%s', count(*) FROM %s;\n" "$tbl" "$tbl"
+    done < "$SOL_DIR/data.rows"
+    cat <<'SQL'
+DO $$
+DECLARE
+    expected   jsonb   := current_setting('capibara.raw_expected')::jsonb;
+    has_inject boolean := current_setting('capibara.has_inject')::boolean;
+    diff       text;
+BEGIN
+    SELECT string_agg(format('%s: ожидалось %s, загружено %s', c.table_name, expected ->> c.table_name, c.n),
+                      '; ' ORDER BY c.table_name)
+      INTO diff
+      FROM raw_count c
+     WHERE c.n IS DISTINCT FROM (expected ->> c.table_name)::bigint;
+    IF diff IS NULL THEN
+        RETURN;
+    ELSIF has_inject THEN
+        RAISE WARNING 'Число строк raw отличается от data.rows из-за патчей inject/: %', diff;
+    ELSE
+        RAISE EXCEPTION 'Число строк raw не совпало с data.rows'
+            USING DETAIL = diff,
+                  HINT = 'Хэши CSV совпали, патчей нет: загрузчик прочитал файлы иначе, чем ожидалось. Проверьте изменения ../scripts/load_raw.py (sync) и data.rows (PLAN 6.6).';
+    END IF;
+END $$;
+\pset footer off
+SELECT table_name AS "таблица", n AS "строк" FROM raw_count
+UNION ALL SELECT 'итого', sum(n) FROM raw_count;
+INSERT INTO ops.raw_state (fingerprint, row_counts, inject)
+SELECT :'fp', jsonb_object_agg(table_name, n ORDER BY table_name), string_to_array(:'inject_list', ' ')
+  FROM raw_count;
+COMMIT;
+SQL
+  } > "$sql"
+
+  step "патчи inject/ (${#inject[@]} шт.), сверка строк с data.rows, запись отпечатка"
+  psql_or_die "$E_RAW" "патчи inject/ и сверка строк raw (отпечаток не записан, следующий запуск перезальёт raw)" \
+    -v expected="{$expected}" -v has_inject="$([ ${#inject[@]} -gt 0 ] && echo true || echo false)" \
+    -v fp="$fp" -v inject_list="${inject[*]}" -f "$sql"
+  say "    отпечаток raw: ${fp:0:12}…"
+}
+
 # ---------------------------------------------------------------------
 #  main
 # ---------------------------------------------------------------------
