@@ -1,0 +1,4 @@
+# Наши файлы всегда с LF: run.sh и SQL выполняются в Linux-контейнере,
+# а на Windows git по умолчанию выгружает CRLF (PLAN 6.3).
+* text=auto eol=lf
+*.sh text eol=lf
