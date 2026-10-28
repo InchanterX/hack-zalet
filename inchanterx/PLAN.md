@@ -383,7 +383,7 @@ docker compose --project-directory "$ROOT" \
   - `volumes: [".:/work"]` (весь корень: нужны `../scripts`, `../data`, `../docs`), `working_dir: /work/${SOLUTION_DIR}`;
   - `user: "${HOST_UID:-0}:${HOST_GID:-0}"`. На Linux `run.sh` экспортирует `HOST_UID=$(id -u)`, `HOST_GID=$(id -g)`, чтобы файлы в `../data`, `answers/`, `logs/` не стали принадлежать root. На Windows и macOS (Docker Desktop) владелец файлов на bind mount не важен, и переменные не экспортируются: `id -u` в Git Bash даёт uid MSYS (например 197609), которого в контейнере нет;
   - `environment`: `PGHOST=postgres PGPORT=5432 PGUSER=hack PGPASSWORD=hack PGDATABASE=${SOLUTION_DB} HOME=/tmp` (`HOME` — потому что у пользователя с uid хоста в образе нет домашней папки);
-  - `depends_on: postgres: condition: service_healthy`.
+  - `depends_on: postgres: condition: service_healthy` — как документация связи; стадии `run.sh` запускает с `docker compose run --no-deps`. Без этого флага `compose run` поднимает зависимости и при любом расхождении конфигурации `postgres` (клон в другом пути, изменённый `docker-compose.yml` после `sync`) **пересоздаёт общий контейнер**. Готовность `postgres` перед стадией проверяет сам `run.sh`: не healthy → код 20 с подсказкой `./run.sh up`. Поднимает контейнер только стадия `up`.
 
 **`.env.example`** (коммитим; `.env` — в `inchanterx/.gitignore`): `SOLUTION_DB=` (**пусто**: пустое значение = имя папки), `ANALYST_PASSWORD`, `UPSTREAM_URL`. `run.sh` читает `inchanterx/.env` сам и передаёт значения в compose через `--env-file`/экспорт: `.env` в корне не используем, он был бы общим для всех. Явное `SOLUTION_DB` в `.env` — только сознательная настройка человека.
 
